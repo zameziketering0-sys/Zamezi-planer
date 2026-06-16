@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="sr">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="default"/>
+<meta name="apple-mobile-web-app-title" content="Zamezi"/>
+<title>Zamezi Ketering</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  body { font-family: system-ui, sans-serif; background: #FFF0F3; color: #1A1A1A; }
+  input, select, textarea, button { font-family: inherit; }
+  #root { min-height: 100vh; }
+  .spinner { display:inline-block; width:18px; height:18px; border:3px solid #fff4; border-top-color:#fff; border-radius:50%; animation:spin .7s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+</style>
+</head>
+<body>
+<div id="root"><div style="display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;gap:16px;color:#A0001C;">
+  <div style="font-size:28px;font-weight:900;letter-spacing:3px;font-family:Georgia,serif;">ZAMEZI</div>
+  <div class="spinner" style="border-top-color:#A0001C;border-color:#F2D0D8;border-top-color:#A0001C;"></div>
+  <div style="font-size:13px;color:#8B6670;">Učitavanje...</div>
+</div></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, getDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { createElement as h, useState, useEffect, useCallback, Fragment } from "https://esm.sh/react@18";
+import { createRoot } from "https://esm.sh/react-dom@18/client";
+
+// ── FIREBASE ──────────────────────────────────────────────────────────────────
+const fbApp = initializeApp({
+  apiKey: "AIzaSyD4n4A9Jy7YUciWUu_P7JD3_a6NOCSaZus",
+  authDomain: "zamezi-planer.firebaseapp.com",
+  projectId: "zamezi-planer",
+  storageBucket: "zamezi-planer.firebasestorage.app",
+  messagingSenderId: "471939321889",
+  appId: "1:471939321889:web:3a9dc0df8599a9a8f61360"
+});
+const db = getFirestore(fbApp);
+const ordersCol = collection(db, "orders");
+const menuDocRef = doc(db, "settings", "menu");
+
+async function fbSaveOrder(order) {
+  await setDoc(doc(db,"orders",String(order.id)), order);
+}
+async function fbDeleteOrder(id) {
+  await deleteDoc(doc(db,"orders",String(id)));
+}
+async function fbSaveMenu(menu) {
+  await setDoc(menuDocRef, { items: menu });
+}
+async function fbLoadMenu() {
+  try { const s=await getDoc(menuDocRef); return s.exists()?(s.data().items||DEFAULT_MENU):DEFAULT_MENU; } catch { return DEFAULT_MENU; }
+}
+
+// ── CONSTANTS ─────────────────────────────────────────────────────────────────
+const C = {
+  bg:"#FFF0F3", surface:"#FFFFFF", border:"#F2D0D8",
+  crimson:"#A0001C", crimsonLt:"#FDEEF1",
+  pink:"#FFB6C1", pinkLt:"#FFF5F7", pinkMd:"#F9D0DA",
+  text:"#1A1A1A", muted:"#8B6670",
+  green:"#2D7A4F", greenLt:"#EAF5EE",
+  yellow:"#FFF8E1", shadow:"rgba(160,0,28,0.10)",
+};
+const FS="Georgia,serif", FA="system-ui,sans-serif";
+const pad=n=>String(n).padStart(2,"0");
+const dKey=(y,m,d)=>`${y}-${pad(m+1)}-${pad(d)}`;
+const MONTHS=["Januar","Februar","Mart","April","Maj","Jun","Jul","Avgust","Septembar","Oktobar","Novembar","Decembar"];
+const DAYS=["Pon","Uto","Sre","Čet","Pet","Sub","Ned"];
+const KANALI=["Telefon","Viber","WhatsApp","Instagram"];
+const SCOL={Nova:"#A0001C",Potvrđena:"#D4621A",Isporučena:"#2D7A4F",Otkazana:"#999"};
+const safeCart=c=>Array.isArray(c)?c:[];
+
+const DEFAULT_MENU=[
+  {id:"m1",name:"Mešana plata M",price:2500,category:"Plate",type:"komadno"},
+  {id:"m2",name:"Mešana plata L",price:4500,category:"Plate",type:"komadno"},
+  {id:"m3",name:"Mešana plata XL",price:7000,category:"Plate",type:"komadno"},
+  {id:"m4",name:"Sir plata",price:3000,category:"Plate",type:"komadno"},
+  {id:"m5",name:"Pita sa sirom",price:800,category:"Testa",type:"kilogramski"},
+  {id:"m6",name:"Pita sa mesom",price:850,category:"Testa",type:"kilogramski"},
+  {id:"m7",name:"Sendvič pršut",price:350,category:"Sendviči",type:"komadno"},
+  {id:"m8",name:"Sendvič sir",price:300,category:"Sendviči",type:"komadno"},
+  {id:"m9",name:"Mini peciva 10kom",price:600,category:"Peciva",type:"komadno"},
+  {id:"m10",name:"Sok 1L",price:250,category:"Pića",type:"komadno"},
+  {id:"m11",name:"Voda 0.5L",price:100,category:"Pića",type:"komadno"},
+];
+
+function linePrice(item,qty,grams){
+  const q=Number(qty)||1;
+  if(item&&item.type==="kilogramski"){const kg=(Number(grams)||1000)/1000;return Math.round((item.price||0)*kg*q);}
+  return(item?(item.price||0):0)*q;
+}
+const iSt=(extra={})=>({width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:14,background:C.surface,color:C.text,boxSizing:"border-box",outline:"none",fontFamily:FA,...extra});
+const e=(tag,props,...kids)=>h(tag,props,...kids);
+
+// ── PDF ───────────────────────────────────────────────────────────────────────
+function PrintDay({orders,date,onClose}){
+  const sorted=[...orders.filter(o=>o.datum===date)].sort((a,b)=>a.vreme.localeCompare(b.vreme));
+  const [loading,setLoading]=useState(false);
+  const [pdfUrl,setPdfUrl]=useState(null);
+  const generate=()=>{
+    setLoading(true);
+    try{
+      const{jsPDF}=window.jspdf;
+      const doc=new jsPDF({unit:"mm",format:"a4"});
+      const ML=14,PW=210,CW=182;let y=14;
+      const chk=n=>{if(y+n>277){doc.addPage();y=14;}};
+      doc.setFontSize(22);doc.setFont("helvetica","bold");doc.setTextColor(160,0,28);doc.text("ZAMEZI",ML,y);
+      doc.setFontSize(11);doc.setFont("helvetica","italic");doc.setTextColor(150,150,150);doc.text("ketering",ML,y+6);
+      doc.setFontSize(14);doc.setFont("helvetica","bold");doc.setTextColor(50,50,50);doc.text(date,PW-ML,y,{align:"right"});
+      doc.setFontSize(10);doc.setFont("helvetica","normal");doc.setTextColor(150,150,150);doc.text(sorted.length+" porudzbina",PW-ML,y+6,{align:"right"});
+      y+=12;doc.setDrawColor(160,0,28);doc.setLineWidth(0.6);doc.line(ML,y,PW-ML,y);y+=8;
+      sorted.forEach((o,oi)=>{
+        const sc=safeCart(o.cart);chk(20+sc.length*8);
+        doc.setFontSize(17);doc.setFont("helvetica","bold");doc.setTextColor(160,0,28);
+        doc.text(o.vreme+"  "+o.ime+" "+(o.prezime||""),ML,y);
+        doc.text(Number(o.ukupno||0).toLocaleString("sr-RS")+" RSD",PW-ML,y,{align:"right"});
+        y+=5;
+        doc.setFontSize(9);doc.setFont("helvetica","normal");doc.setTextColor(100,100,100);
+        const sub=["Tel: "+(o.telefon||""),o.kanal||"",o.dostava!==false?"Dostava: "+(o.adresa||"-"):"Preuzimanje",o.izmene?"Izmene: "+o.izmene:"",o.napomene||""].filter(Boolean).join(" · ");
+        const sl=doc.splitTextToSize(sub,CW);doc.text(sl,ML,y);y+=sl.length*4+3;
+        sc.forEach(c=>{chk(9);const lp=linePrice(c,c.qty,c.grams);
+          doc.setFontSize(13);doc.setFont("helvetica","bold");doc.setTextColor(20,20,20);
+          doc.text(c.qty+"x  "+c.name+(c.type==="kilogramski"?" ("+(c.grams||1000)+"g)":""),ML+2,y);
+          doc.setTextColor(160,0,28);doc.text(lp.toLocaleString("sr-RS")+" RSD",PW-ML,y,{align:"right"});
+          doc.setDrawColor(220,220,220);doc.setLineWidth(0.2);doc.line(ML+2,y+1.5,PW-ML,y+1.5);y+=7;
+        });
+        if(oi<sorted.length-1){y+=3;chk(6);doc.setDrawColor(200,200,200);doc.setLineWidth(0.3);doc.setLineDash([2,2]);doc.line(ML,y,PW-ML,y);doc.setLineDash([]);y+=6;}
+      });
+      const blob=doc.output("blob");setPdfUrl({url:URL.createObjectURL(blob),fname:"zamezi-"+date+".pdf"});
+    }catch(err){alert("Greška: "+err.message);}
+    setLoading(false);
+  };
+  return h("div",{style:{position:"fixed",inset:0,background:"#0009",zIndex:3000,display:"flex",alignItems:"center",justifyContent:"center"}},
+    h("div",{style:{background:"#fff",borderRadius:18,padding:26,width:"min(500px,97vw)",boxShadow:`0 20px 60px ${C.shadow}`}},
+      h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}},
+        h("h2",{style:{margin:0,fontSize:17,color:C.crimson,fontFamily:FS}},"📄 PDF — "+date),
+        h("button",{onClick:onClose,style:{background:"none",border:"none",fontSize:22,cursor:"pointer"}},"✕")),
+      sorted.length===0?h("p",{style:{color:"#888",textAlign:"center",padding:"30px 0"}},"Nema porudžbina."):h(Fragment,null,
+        h("div",{style:{marginBottom:18}},sorted.map((o,i)=>
+          h("div",{key:o.id,style:{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:i<sorted.length-1?`1px solid ${C.border}`:"none"}},
+            h("span",{style:{fontWeight:800,color:C.crimson,minWidth:48}},o.vreme),
+            h("span",{style:{fontWeight:600,flex:1,paddingLeft:8}},o.ime+" "+(o.prezime||"")),
+            h("span",{style:{fontWeight:700,color:C.crimson}},Number(o.ukupno||0).toLocaleString("sr-RS")+" RSD")))),
+        !pdfUrl&&h("button",{onClick:generate,disabled:loading,style:{width:"100%",padding:"13px 0",borderRadius:11,border:"none",background:loading?"#ccc":C.crimson,color:"#fff",cursor:loading?"default":"pointer",fontWeight:800,fontSize:15}},loading?"⏳ Generišem PDF...":"📄 Napravi PDF"),
+        pdfUrl&&h("div",null,
+          h("div",{style:{background:"#EAF5EE",border:"1px solid #2D7A4F",borderRadius:10,padding:"12px 16px",marginBottom:14,color:C.green,fontWeight:700,fontSize:14,textAlign:"center"}},"✅ PDF spreman!"),
+          h("a",{href:pdfUrl.url,download:pdfUrl.fname,style:{display:"block",width:"100%",padding:"13px 0",borderRadius:11,background:C.crimson,color:"#fff",fontWeight:800,fontSize:15,textDecoration:"none",textAlign:"center",boxSizing:"border-box"}},"⬇️ Preuzmi "+pdfUrl.fname),
+          h("button",{onClick:()=>setPdfUrl(null),style:{marginTop:10,width:"100%",padding:"9px 0",borderRadius:10,border:`1px solid ${C.border}`,background:"#fff",cursor:"pointer",fontWeight:700,color:C.muted,fontSize:13}},"Napravi ponovo"))),
+      h("button",{onClick:onClose,style:{width:"100%",marginTop:12,padding:"10px 0",borderRadius:10,border:`1px solid ${C.border}`,background:"#fff",cursor:"pointer",fontWeight:700,color:C.muted,fontSize:14}},"Zatvori")));
+}
+
+// ── MENU MANAGER ──────────────────────────────────────────────────────────────
+function MenuManager({menu,setMenu,onClose}){
+  const[n,setN]=useState({name:"",price:"",category:"",type:"komadno"});
+  const cats=[...new Set(menu.map(i=>i.category))];
+  const add=async()=>{
+    if(!n.name||!n.price)return;
+    const item={id:Date.now().toString(),name:n.name,price:Number(n.price),category:n.category||"Ostalo",type:n.type};
+    const u=[...menu,item];setMenu(u);await fbSaveMenu(u);setN({name:"",price:"",category:"",type:"komadno"});
+  };
+  const remove=async id=>{const u=menu.filter(i=>i.id!==id);setMenu(u);await fbSaveMenu(u);};
+  const updPrice=async(id,p)=>{const u=menu.map(i=>i.id===id?{...i,price:Number(p)||0}:i);setMenu(u);await fbSaveMenu(u);};
+  return h("div",{style:{position:"fixed",inset:0,background:"#0008",zIndex:2000,display:"flex",alignItems:"center",justifyContent:"center"}},
+    h("div",{style:{background:C.surface,borderRadius:18,padding:26,width:"min(640px,96vw)",maxHeight:"90vh",overflowY:"auto",boxShadow:`0 20px 60px ${C.shadow}`}},
+      h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18}},
+        h("h2",{style:{margin:0,fontSize:19,color:C.crimson,fontFamily:FS}},"🍽 Meni"),
+        h("button",{onClick:onClose,style:{background:"none",border:"none",fontSize:22,cursor:"pointer",color:C.muted}},"✕")),
+      h("div",{style:{background:C.pinkLt,border:`1px solid ${C.border}`,borderRadius:12,padding:15,marginBottom:20}},
+        h("div",{style:{fontSize:11,fontWeight:700,color:C.crimson,textTransform:"uppercase",letterSpacing:".5px",marginBottom:10}},"Dodaj artikal"),
+        h("div",{style:{display:"grid",gridTemplateColumns:"2fr 1fr",gap:8,marginBottom:8}},
+          h("input",{placeholder:"Naziv",value:n.name,onChange:e=>setN(p=>({...p,name:e.target.value})),style:iSt()}),
+          h("input",{placeholder:"Cena RSD",type:"number",value:n.price,onChange:e=>setN(p=>({...p,price:e.target.value})),style:iSt()})),
+        h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}},
+          h("input",{placeholder:"Kategorija",value:n.category,onChange:e=>setN(p=>({...p,category:e.target.value})),list:"mcats",style:iSt()}),
+          h("datalist",{id:"mcats"},cats.map(c=>h("option",{key:c,value:c}))),
+          h("div",{style:{display:"flex",gap:6}},["komadno","kilogramski"].map(t=>
+            h("button",{key:t,onClick:()=>setN(p=>({...p,type:t})),style:{flex:1,padding:"7px 4px",borderRadius:8,cursor:"pointer",fontWeight:700,fontSize:11,border:`2px solid ${n.type===t?C.crimson:C.border}`,background:n.type===t?C.crimsonLt:C.surface,color:n.type===t?C.crimson:C.muted}},
+              t==="komadno"?"📦 Komad":"⚖️ /kg")))),
+        h("button",{onClick:add,style:{padding:"8px 20px",borderRadius:8,border:"none",background:C.crimson,color:"#fff",cursor:"pointer",fontWeight:700,fontSize:13}},"+ Dodaj")),
+      cats.map(cat=>h("div",{key:cat,style:{marginBottom:14}},
+        h("div",{style:{fontSize:11,fontWeight:700,color:C.muted,textTransform:"uppercase",letterSpacing:".5px",marginBottom:6}},cat),
+        menu.filter(i=>i.category===cat).map(item=>
+          h("div",{key:item.id,style:{display:"flex",alignItems:"center",gap:8,padding:"7px 4px",borderBottom:`1px solid ${C.border}`}},
+            h("span",{style:{flex:1,fontSize:14}},item.name),
+            h("span",{style:{fontSize:11,padding:"2px 7px",borderRadius:10,fontWeight:700,background:item.type==="kilogramski"?"#E8F5E9":"#EEF",color:item.type==="kilogramski"?C.green:"#556"}},item.type==="kilogramski"?"⚖️/kg":"📦"),
+            h("input",{type:"number",value:item.price,onChange:e=>updPrice(item.id,e.target.value),style:iSt({width:90,textAlign:"right",fontWeight:700,color:C.crimson})}),
+            h("span",{style:{fontSize:12,color:C.muted}},item.type==="kilogramski"?"RSD/kg":"RSD"),
+            h("button",{onClick:()=>remove(item.id),style:{background:"none",border:"none",color:"#ccc",cursor:"pointer",fontSize:16}},"✕")))))));
+}
+
+// ── KASA ──────────────────────────────────────────────────────────────────────
+function Kasa({menu,cart,setCart}){
+  const cats=[...new Set(menu.map(i=>i.category))];
+  const[activeCat,setActiveCat]=useState(cats[0]||"Sve");
+  const safeC=safeCart(cart);
+  const addItem=item=>{const ex=safeC.find(c=>c.id===item.id);if(ex)setCart(safeC.map(c=>c.id===item.id?{...c,qty:c.qty+1}:c));else setCart([...safeC,{...item,qty:1,grams:item.type==="kilogramski"?1000:null}]);};
+  const changeQty=(id,delta)=>setCart(safeC.map(c=>c.id===id?{...c,qty:Math.max(0,c.qty+delta)}:c).filter(c=>c.qty>0));
+  const changeGrams=(id,g)=>setCart(safeC.map(c=>c.id===id?{...c,grams:Number(g)||0}:c));
+  const shown=menu.filter(i=>activeCat==="Sve"||i.category===activeCat);
+  return h("div",{style:{border:`1px solid ${C.border}`,borderRadius:14,overflow:"hidden",background:C.pinkLt}},
+    h("div",{style:{display:"flex",background:C.pinkMd,overflowX:"auto"}},
+      ["Sve",...cats].map(cat=>h("button",{key:cat,onClick:()=>setActiveCat(cat),style:{padding:"8px 13px",border:"none",cursor:"pointer",whiteSpace:"nowrap",flexShrink:0,fontWeight:700,fontSize:11,textTransform:"uppercase",letterSpacing:".4px",background:activeCat===cat?C.crimson:"transparent",color:activeCat===cat?"#fff":C.muted}},cat))),
+    h("div",{style:{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(128px,1fr))",gap:8,padding:10}},
+      shown.map(item=>{const inC=safeC.find(c=>c.id===item.id);return h("button",{key:item.id,onClick:()=>addItem(item),style:{padding:"10px 8px",borderRadius:10,cursor:"pointer",textAlign:"left",border:`2px solid ${inC?C.crimson:C.border}`,background:inC?C.crimsonLt:C.surface,transition:"all .1s"}},
+        h("div",{style:{fontSize:12,fontWeight:700,color:inC?C.crimson:C.text,lineHeight:1.3}},item.name),
+        h("div",{style:{fontSize:11,color:C.muted,marginTop:2}},item.price.toLocaleString("sr-RS")+" RSD"+(item.type==="kilogramski"?"/kg":"")),
+        inC&&h("div",{style:{fontSize:10,color:C.green,fontWeight:700,marginTop:2}},"✓ "+inC.qty+"x"));})),
+    safeC.length>0&&h("div",{style:{padding:"10px 13px",background:C.crimsonLt,borderTop:`1px solid ${C.border}`}},
+      h("div",{style:{fontSize:11,fontWeight:700,color:C.crimson,textTransform:"uppercase",letterSpacing:".5px",marginBottom:8}},"Korpa"),
+      safeC.map(c=>{const lp=linePrice(c,c.qty,c.grams);return h("div",{key:c.id,style:{marginBottom:8,paddingBottom:8,borderBottom:`1px dashed ${C.border}`}},
+        h("div",{style:{display:"flex",alignItems:"center",gap:6}},
+          h("span",{style:{flex:1,fontSize:13,fontWeight:700}},c.name),
+          h("button",{onClick:()=>changeQty(c.id,-1),style:{width:26,height:26,borderRadius:7,border:`1px solid ${C.border}`,background:C.surface,cursor:"pointer",fontSize:15,color:C.crimson,fontWeight:700,padding:0}},"−"),
+          h("span",{style:{width:22,textAlign:"center",fontWeight:700,fontSize:14}},c.qty),
+          h("button",{onClick:()=>changeQty(c.id,1),style:{width:26,height:26,borderRadius:7,border:`1px solid ${C.border}`,background:C.surface,cursor:"pointer",fontSize:15,color:C.crimson,fontWeight:700,padding:0}},"+"),
+          h("span",{style:{width:82,textAlign:"right",fontWeight:800,fontSize:13,color:C.crimson}},lp.toLocaleString("sr-RS")+" RSD")),
+        c.type==="kilogramski"&&h("div",{style:{display:"flex",alignItems:"center",gap:6,marginTop:5,paddingLeft:4}},
+          h("span",{style:{fontSize:11,color:C.muted}},"⚖️"),
+          h("input",{type:"number",value:c.grams||"",placeholder:"1000",onChange:ev=>changeGrams(c.id,ev.target.value),style:{width:75,padding:"4px 7px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,fontWeight:700,color:C.crimson,textAlign:"right"}}),
+          h("span",{style:{fontSize:11,color:C.muted}},"g"),
+          h("span",{style:{fontSize:11,color:C.green}},"= "+((Number(c.grams)||1000)/1000).toFixed(2)+" kg × "+c.price+" = "+lp.toLocaleString("sr-RS")+" RSD")));}))));
+}
+
+// ── ORDER FORM ────────────────────────────────────────────────────────────────
+function OrderForm({date,onSave,onCancel,existing,menu}){
+  const[ime,setIme]=useState(existing?.ime||"");
+  const[prezime,setPrezime]=useState(existing?.prezime||"");
+  const[telefon,setTelefon]=useState(existing?.telefon||"");
+  const[kanal,setKanal]=useState(existing?.kanal||"Telefon");
+  const[vreme,setVreme]=useState(existing?.vreme||"12:00");
+  const[cart,setCart]=useState(()=>safeCart(existing?.cart));
+  const[izmene,setIzmene]=useState(existing?.izmene||"");
+  const[dostava,setDostava]=useState(existing?.dostava!==false);
+  const[adresa,setAdresa]=useState(existing?.adresa||"");
+  const[napomene,setNapomene]=useState(existing?.napomene||"");
+  const safeC=safeCart(cart);
+  const ukupno=safeC.reduce((s,c)=>s+linePrice(c,c.qty,c.grams),0);
+  const handleSave=()=>{
+    if(!ime.trim()){alert("Unesite ime!");return;}
+    if(!telefon.trim()){alert("Unesite telefon!");return;}
+    if(safeC.length===0){alert("Dodajte bar jedan artikal!");return;}
+    const porudzbina=safeC.map(c=>c.type==="kilogramski"?`${c.qty}x ${c.name} (${c.grams||1000}g)`:`${c.qty}x ${c.name}`).join(", ");
+    onSave({id:existing?.id||Date.now().toString(),datum:existing?.datum||date,ime,prezime,telefon,kanal,vreme,status:existing?.status||"Nova",cart:safeC,izmene,dostava,adresa,napomene,ukupno,porudzbina,preuzeta:existing?.preuzeta||false,otkazana:existing?.otkazana||false});
+  };
+  const lbl=(txt,req)=>h("label",{style:{display:"block",fontSize:11,fontWeight:700,color:C.muted,marginBottom:4,textTransform:"uppercase",letterSpacing:".5px"}},txt,req&&h("span",{style:{color:C.crimson}}," *"));
+  const kanalIcons={Telefon:"📞",Viber:"💜",WhatsApp:"💬",Instagram:"📸"};
+  return h("div",{style:{position:"fixed",inset:0,background:"#0009",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center"}},
+    h("div",{style:{background:C.surface,borderRadius:18,padding:24,width:"min(660px,97vw)",maxHeight:"94vh",overflowY:"auto",boxShadow:`0 20px 60px ${C.shadow}`}},
+      h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18}},
+        h("h2",{style:{margin:0,fontSize:17,color:C.crimson,fontFamily:FS}},(existing?"Izmeni":"Nova")+" porudžbina — "+(existing?.datum||date)),
+        h("button",{onClick:onCancel,style:{background:"none",border:"none",fontSize:22,cursor:"pointer",color:C.muted}},"✕")),
+      h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 13px"}},
+        h("div",{style:{marginBottom:12}},lbl("Ime",true),h("input",{value:ime,onChange:e=>setIme(e.target.value),style:iSt()})),
+        h("div",{style:{marginBottom:12}},lbl("Prezime"),h("input",{value:prezime,onChange:e=>setPrezime(e.target.value),style:iSt()}))),
+      h("div",{style:{marginBottom:12}},
+        lbl("Telefon / Kanal",true),
+        h("input",{type:"tel",value:telefon,onChange:e=>setTelefon(e.target.value),style:{...iSt(),marginBottom:8}}),
+        h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:6}},
+          KANALI.map(k=>h("button",{key:k,onClick:()=>setKanal(k),style:{padding:"7px 4px",borderRadius:8,cursor:"pointer",fontWeight:700,fontSize:12,textAlign:"center",border:`2px solid ${kanal===k?C.crimson:C.border}`,background:kanal===k?C.crimsonLt:C.surface,color:kanal===k?C.crimson:C.muted,display:"flex",flexDirection:"column",alignItems:"center",gap:2}},
+            h("span",{style:{fontSize:16}},kanalIcons[k]),h("span",{style:{fontSize:10}},k))))),
+      h("div",{style:{marginBottom:12}},lbl("Vreme"),h("input",{type:"time",value:vreme,onChange:e=>setVreme(e.target.value),style:iSt()})),
+      h("div",{style:{marginBottom:12}},
+        lbl("Porudžbina",true),
+        h(Kasa,{menu,cart,setCart})),
+      h("div",{style:{background:C.yellow,border:"1px solid #F5D76E55",borderRadius:10,padding:12,marginBottom:12}},
+        lbl("📝 Izmene u meniju"),
+        h("textarea",{value:izmene,onChange:e=>setIzmene(e.target.value),placeholder:"Dodaci, zamene, uklanjanja...",style:{...iSt(),minHeight:48,resize:"vertical",background:"#fff9"}})),
+      h("div",{style:{marginBottom:12}},
+        lbl("Isporuka"),
+        h("div",{style:{display:"flex",gap:8}},
+          [true,false].map(v=>h("button",{key:String(v),onClick:()=>setDostava(v),style:{flex:1,padding:"9px 0",borderRadius:8,cursor:"pointer",fontWeight:700,fontSize:13,border:`2px solid ${dostava===v?C.crimson:C.border}`,background:dostava===v?C.crimsonLt:C.surface,color:dostava===v?C.crimson:C.muted}},v?"🚚 Dostava":"🏠 Preuzimanje")))),
+      dostava&&h("div",{style:{marginBottom:12}},lbl("Adresa dostave"),h("input",{value:adresa,onChange:e=>setAdresa(e.target.value),placeholder:"Ulica i broj...",style:iSt()})),
+      h("div",{style:{marginBottom:14}},lbl("Napomene"),h("input",{value:napomene,onChange:e=>setNapomene(e.target.value),placeholder:"Interne napomene...",style:iSt()})),
+      h("div",{style:{background:C.crimsonLt,border:`1px solid ${C.pink}`,borderRadius:12,padding:"12px 15px",marginBottom:14,display:"flex",justifyContent:"space-between",alignItems:"center"}},
+        h("span",{style:{fontSize:14,fontWeight:700,color:C.muted}},"Ukupno:"),
+        h("span",{style:{fontSize:26,fontWeight:900,color:C.crimson,fontFamily:FS}},ukupno.toLocaleString("sr-RS")+" RSD")),
+      h("div",{style:{display:"flex",gap:10}},
+        h("button",{onClick:onCancel,style:{flex:1,padding:"11px 0",borderRadius:10,border:`1px solid ${C.border}`,background:C.surface,cursor:"pointer",fontWeight:700,color:C.muted,fontSize:14}},"Otkaži"),
+        h("button",{onClick:handleSave,style:{flex:2,padding:"11px 0",borderRadius:10,border:"none",background:C.crimson,color:"#fff",cursor:"pointer",fontWeight:800,fontSize:14}},(existing?"Sačuvaj ✓":"Dodaj porudžbinu ✓")))));
+}
+
+// ── ORDER CARD ────────────────────────────────────────────────────────────────
+function OrderCard({order,onEdit,onDelete,onTogglePreuzeta,onToggleOtkazana}){
+  const[open,setOpen]=useState(false);
+  const done=!!order.preuzeta, otkazana=!!order.otkazana;
+  const sc=safeCart(order.cart);
+  const kIcon={Telefon:"📞",Viber:"💜",WhatsApp:"💬",Instagram:"📸"}[order.kanal]||"📞";
+  const borderCol=otkazana?"#e0e0e0":done?C.green:C.crimson;
+  const ts=otkazana||done?{textDecoration:"line-through",color:C.muted}:{};
+  return h("div",{style:{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,marginBottom:8,overflow:"hidden",borderLeft:`4px solid ${borderCol}`,opacity:otkazana?0.6:done?0.85:1}},
+    h("div",{onClick:()=>setOpen(p=>!p),style:{padding:"10px 14px",cursor:"pointer",display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}},
+      h("span",{style:{fontWeight:800,fontSize:14,...ts}},order.vreme),
+      h("span",{style:{fontWeight:700,fontSize:14,...ts,color:otkazana||done?C.muted:C.crimson}},order.ime+" "+(order.prezime||"")),
+      order.kanal&&h("span",{style:{fontSize:12}},kIcon+" "+order.kanal),
+      done&&!otkazana&&h("span",{style:{fontSize:11,background:C.greenLt,color:C.green,borderRadius:10,padding:"2px 8px",fontWeight:700}},"✓ Preuzeta"),
+      otkazana&&h("span",{style:{fontSize:11,background:"#f5f5f5",color:"#999",borderRadius:10,padding:"2px 8px",fontWeight:700}},"✕ Otkazana"),
+      h("span",{style:{marginLeft:"auto",fontWeight:900,fontSize:15,fontFamily:FS,...ts,color:otkazana||done?C.muted:C.crimson}},Number(order.ukupno||0).toLocaleString("sr-RS")+" RSD"),
+      h("span",{style:{color:C.muted,fontSize:14}},open?"▲":"▼")),
+    !open&&h("div",{style:{padding:"0 14px 8px",fontSize:12,color:C.muted,borderTop:`1px dashed ${C.border}`}},
+      h("span",{style:{paddingTop:5,display:"block"}},(order.dostava!==false?"🚚 "+(order.adresa||"Dostava"):"🏠 Preuzimanje")+" · "+order.porudzbina)),
+    open&&h("div",{style:{padding:"0 14px 14px",borderTop:`1px solid ${C.border}`}},
+      h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"7px 14px",marginTop:9}},
+        h("div",null,h("span",{style:{fontSize:10,fontWeight:700,color:C.muted,textTransform:"uppercase",letterSpacing:".5px"}},"Telefon"),h("p",{style:{margin:"2px 0 0",fontSize:13}},kIcon+" "+order.telefon+(order.kanal?" ("+order.kanal+")":""))),
+        h("div",null,h("span",{style:{fontSize:10,fontWeight:700,color:C.muted,textTransform:"uppercase",letterSpacing:".5px"}},"Isporuka"),h("p",{style:{margin:"2px 0 0",fontSize:13}},order.dostava!==false?"🚚 "+(order.adresa||"—"):"🏠 Preuzimanje"))),
+      sc.length>0&&h("div",{style:{marginTop:10,background:C.pinkLt,borderRadius:8,padding:"8px 12px"}},
+        h("div",{style:{fontSize:11,fontWeight:700,color:C.crimson,textTransform:"uppercase",letterSpacing:".5px",marginBottom:6}},"Stavke"),
+        sc.map(c=>{const lp=linePrice(c,c.qty,c.grams);return h("div",{key:c.id,style:{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:3}},
+          h("span",null,c.qty+"× "+c.name+(c.type==="kilogramski"?" ("+(c.grams||1000)+"g)":"")),
+          h("span",{style:{fontWeight:700,color:C.crimson}},lp.toLocaleString("sr-RS")+" RSD"));})),
+      order.izmene&&h("div",{style:{background:C.yellow,borderRadius:8,padding:"7px 12px",marginTop:8}},h("span",{style:{fontSize:11,fontWeight:700,color:"#B8860B",textTransform:"uppercase",letterSpacing:".5px"}},"📝 Izmene: "),h("span",{style:{fontSize:13}},order.izmene)),
+      order.napomene&&h("div",{style:{marginTop:5}},h("span",{style:{fontSize:10,fontWeight:700,color:C.muted,textTransform:"uppercase",letterSpacing:".5px"}},"Napomene"),h("p",{style:{margin:"2px 0 0",fontSize:13}},order.napomene)),
+      h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginTop:14}},
+        h("button",{onClick:()=>onTogglePreuzeta(order.id),style:{padding:"11px 0",borderRadius:10,cursor:"pointer",fontWeight:800,fontSize:14,border:`2px solid ${done?"#2D7A4F":"#ccc"}`,background:done?C.greenLt:"#f9f9f9",color:done?"#2D7A4F":"#aaa"}},"✓ "+(done?"Preuzeta":"Preuzeto?")),
+        h("button",{onClick:()=>onToggleOtkazana(order.id),style:{padding:"11px 0",borderRadius:10,cursor:"pointer",fontWeight:800,fontSize:14,border:`2px solid ${otkazana?C.crimson:"#ccc"}`,background:otkazana?C.crimsonLt:"#f9f9f9",color:otkazana?C.crimson:"#aaa"}},"✕ "+(otkazana?"Otkazana":"Otkazano?"))),
+      h("div",{style:{display:"flex",gap:8,marginTop:10}},
+        h("button",{onClick:()=>onEdit(order),style:{flex:1,padding:"8px 0",borderRadius:8,border:`1px solid ${C.border}`,background:C.surface,color:C.muted,cursor:"pointer",fontWeight:700,fontSize:13}},"✏️ Izmeni"),
+        h("button",{onClick:()=>{if(window.confirm("Obrisati?"))onDelete(order.id);},style:{padding:"8px 14px",borderRadius:8,border:"1px solid #ddd",background:"#f8f8f8",color:"#bbb",cursor:"pointer",fontWeight:700,fontSize:13}},"🗑"))));
+}
+
+// ── ANNUAL VIEW ───────────────────────────────────────────────────────────────
+function AnnualView({orders,year,onSelectMonth}){
+  return h("div",{style:{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))",gap:13}},
+    MONTHS.map((name,mi)=>{
+      const mo=orders.filter(o=>{const d=new Date(o.datum);return d.getFullYear()===year&&d.getMonth()===mi;});
+      const total=mo.reduce((s,o)=>s+Number(o.ukupno||0),0);
+      const preuzete=mo.filter(o=>o.preuzeta).length;
+      return h("div",{key:mi,onClick:()=>onSelectMonth(mi),style:{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:"14px 13px",cursor:"pointer",boxShadow:mo.length?`0 4px 14px ${C.shadow}`:"none"}},
+        h("div",{style:{fontSize:11,fontWeight:700,color:C.muted,textTransform:"uppercase",letterSpacing:".6px"}},name),
+        h("div",{style:{fontSize:28,fontWeight:900,color:mo.length?C.crimson:"#e8d0d5",margin:"5px 0 1px",fontFamily:FS}},mo.length),
+        h("div",{style:{fontSize:11,color:C.muted}},"porudžbina"),
+        preuzete>0&&h("div",{style:{fontSize:11,color:C.green,marginTop:2}},"✓ "+preuzete+" preuzeto"),
+        total>0&&h("div",{style:{marginTop:9,paddingTop:7,borderTop:`1px solid ${C.border}`}},
+          h("div",{style:{fontSize:10,color:C.muted}},"Prihod"),
+          h("div",{style:{fontSize:13,fontWeight:800,color:C.crimson}},total.toLocaleString("sr-RS")+" RSD")));
+    }));
+}
+
+// ── MONTHLY VIEW ──────────────────────────────────────────────────────────────
+function MonthlyView({orders,year,month,onSelectDay}){
+  const today=new Date();
+  const first=new Date(year,month,1).getDay();
+  const offset=first===0?6:first-1;
+  const dim=new Date(year,month+1,0).getDate();
+  const cells=Array(offset).fill(null).concat(Array.from({length:dim},(_,i)=>i+1));
+  while(cells.length%7)cells.push(null);
+  const mo=orders.filter(o=>{const d=new Date(o.datum);return d.getFullYear()===year&&d.getMonth()===month;});
+  const total=mo.reduce((s,o)=>s+Number(o.ukupno||0),0);
+  const preuzete=mo.filter(o=>o.preuzeta).length;
+  const todayStr=dKey(today.getFullYear(),today.getMonth(),today.getDate());
+  const dOrd=d=>[...orders.filter(o=>o.datum===dKey(year,month,d))].sort((a,b)=>a.vreme.localeCompare(b.vreme));
+  const isToday=d=>dKey(year,month,d)===todayStr;
+  return h("div",null,
+    h("div",{style:{display:"flex",gap:10,marginBottom:16,flexWrap:"wrap"}},
+      [{l:"Porudžbine",v:mo.length,c:C.crimson},{l:"Ukupan prihod",v:total.toLocaleString("sr-RS")+" RSD",c:C.crimson},{l:"Preuzeto",v:preuzete+" / "+mo.length,c:C.green}].map(s=>
+        h("div",{key:s.l,style:{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"9px 14px",flex:"1 1 110px"}},
+          h("div",{style:{fontSize:10,fontWeight:700,color:C.muted,textTransform:"uppercase",letterSpacing:".5px"}},s.l),
+          h("div",{style:{fontSize:18,fontWeight:900,color:s.c,marginTop:2,fontFamily:FS}},s.v)))),
+    h("div",{style:{background:C.surface,borderRadius:16,border:`1px solid ${C.border}`,overflow:"hidden",boxShadow:`0 4px 20px ${C.shadow}`}},
+      h("div",{style:{display:"grid",gridTemplateColumns:"repeat(7,1fr)",background:C.crimson}},
+        DAYS.map(d=>h("div",{key:d,style:{padding:"10px 0",textAlign:"center",fontSize:12,fontWeight:700,color:"#fff",letterSpacing:".5px"}},d))),
+      h("div",{style:{display:"grid",gridTemplateColumns:"repeat(7,1fr)"}},
+        cells.map((d,i)=>{
+          const dO=d?dOrd(d):[];
+          const allDone=dO.length>0&&dO.every(o=>o.preuzeta);
+          const todayMark=d&&isToday(d);
+          const colIndex=i%7;
+          const isLastRow=i>=cells.length-7;
+          return h("div",{key:i,onClick:()=>d&&onSelectDay(d),style:{minHeight:120,padding:"6px 5px",borderRight:colIndex<6?`1px solid ${C.border}`:"none",borderBottom:!isLastRow?`1px solid ${C.border}`:"none",cursor:d?"pointer":"default",background:d?(allDone?"#F0FFF4":C.surface):C.bg,overflow:"hidden",minWidth:0}},
+            d&&h(Fragment,null,
+              h("div",{style:{display:"inline-flex",alignItems:"center",justifyContent:"center",width:26,height:26,borderRadius:"50%",marginBottom:4,background:todayMark?C.crimson:"transparent",color:todayMark?"#fff":dO.length?C.crimson:C.muted,fontWeight:todayMark||dO.length?800:400,fontSize:13}},d),
+              dO.slice(0,3).map(o=>h("div",{key:o.id,style:{background:o.otkazana?"#f5f5f5":o.preuzeta?"#E8F5E9":C.crimsonLt,border:`1px solid ${o.otkazana?"#ddd":o.preuzeta?"#A5D6A7":C.pink}`,borderRadius:5,padding:"2px 4px",marginBottom:3,fontSize:9,fontWeight:700,color:o.otkazana?"#bbb":o.preuzeta?C.green:C.crimson,textDecoration:o.otkazana||o.preuzeta?"line-through":"none",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",lineHeight:1.5,display:"block",maxWidth:"100%",boxSizing:"border-box"}},o.vreme+" "+o.ime)),
+              dO.length>3&&h("div",{style:{fontSize:10,color:C.muted,fontWeight:700,paddingLeft:2}},"+"+( dO.length-3)+" više")));
+        }))));
+}
+
+// ── DAILY VIEW ────────────────────────────────────────────────────────────────
+function DailyView({orders,date,onAdd,onEdit,onDelete,onTogglePreuzeta,onToggleOtkazana,onPrint}){
+  const dOrd=[...orders.filter(o=>o.datum===date)].sort((a,b)=>a.vreme.localeCompare(b.vreme));
+  const total=dOrd.reduce((s,o)=>s+Number(o.ukupno||0),0);
+  const preuzete=dOrd.filter(o=>o.preuzeta).length;
+  const otkazane=dOrd.filter(o=>o.otkazana).length;
+  return h("div",null,
+    h("div",{style:{display:"flex",gap:10,marginBottom:16,flexWrap:"wrap",alignItems:"stretch"}},
+      h("div",{style:{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"9px 14px"}},
+        h("div",{style:{fontSize:10,fontWeight:700,color:C.muted,textTransform:"uppercase",letterSpacing:".5px"}},"Ukupno danas"),
+        h("div",{style:{fontSize:22,fontWeight:900,color:C.crimson,marginTop:2,fontFamily:FS}},total.toLocaleString("sr-RS")+" RSD")),
+      h("div",{style:{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"9px 14px"}},
+        h("div",{style:{fontSize:10,fontWeight:700,color:C.muted,textTransform:"uppercase",letterSpacing:".5px"}},"Preuzeto"),
+        h("div",{style:{fontSize:22,fontWeight:900,color:C.green,marginTop:2}},preuzete+"/"+dOrd.length)),
+      otkazane>0&&h("div",{style:{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"9px 14px"}},
+        h("div",{style:{fontSize:10,fontWeight:700,color:C.muted,textTransform:"uppercase",letterSpacing:".5px"}},"Otkazano"),
+        h("div",{style:{fontSize:22,fontWeight:900,color:"#999",marginTop:2}},otkazane)),
+      h("div",{style:{marginLeft:"auto",display:"flex",gap:8}},
+        h("button",{onClick:onPrint,style:{padding:"10px 16px",borderRadius:10,border:`1px solid ${C.crimson}`,background:C.crimsonLt,color:C.crimson,cursor:"pointer",fontWeight:700,fontSize:13}},"🖨 Štampaj"),
+        h("button",{onClick:onAdd,style:{padding:"10px 20px",borderRadius:10,border:"none",background:C.crimson,color:"#fff",cursor:"pointer",fontWeight:800,fontSize:14}},"+ Nova porudžbina"))),
+    dOrd.length===0?h("div",{style:{textAlign:"center",padding:"70px 20px",color:C.muted}},
+      h("div",{style:{fontSize:40,marginBottom:12}},"🍽"),
+      h("div",{style:{fontSize:16,fontWeight:700,color:C.crimson}},"Nema porudžbina za ovaj dan"),
+      h("div",{style:{fontSize:13,marginTop:5}},'Kliknite "+ Nova porudžbina"')):
+    dOrd.map(o=>h(OrderCard,{key:o.id,order:o,onEdit,onDelete,onTogglePreuzeta,onToggleOtkazana})));
+}
+
+// ── MAIN APP ──────────────────────────────────────────────────────────────────
+function App(){
+  const today=new Date();
+  const[view,setView]=useState("month");
+  const[year,setYear]=useState(today.getFullYear());
+  const[month,setMonth]=useState(today.getMonth());
+  const[selDate,setSelDate]=useState(dKey(today.getFullYear(),today.getMonth(),today.getDate()));
+  const[orders,setOrders]=useState([]);
+  const[menu,setMenu]=useState(DEFAULT_MENU);
+  const[form,setForm]=useState(null);
+  const[editOrder,setEditOrder]=useState(null);
+  const[showMenu,setShowMenu]=useState(false);
+  const[showPrint,setShowPrint]=useState(false);
+  const[syncing,setSyncing]=useState(false);
+
+  useEffect(()=>{
+    // Load menu from Firebase
+    fbLoadMenu().then(m=>setMenu(m));
+    // Realtime listener for orders
+    const unsub=onSnapshot(ordersCol,snap=>{
+      setOrders(snap.docs.map(d=>d.data()));
+      setSyncing(false);
+    },err=>console.error(err));
+    return unsub;
+  },[]);
+
+  const handleSave=useCallback(async order=>{
+    setForm(null);setEditOrder(null);setSyncing(true);
+    await fbSaveOrder(order);
+  },[]);
+  const handleDelete=useCallback(async id=>{setSyncing(true);await fbDeleteOrder(id);},[]);
+  const handleTogglePreuzeta=useCallback(async id=>{
+    const o=orders.find(x=>x.id===id);if(!o)return;
+    setSyncing(true);await fbSaveOrder({...o,preuzeta:!o.preuzeta,otkazana:false});
+  },[orders]);
+  const handleToggleOtkazana=useCallback(async id=>{
+    const o=orders.find(x=>x.id===id);if(!o)return;
+    setSyncing(true);await fbSaveOrder({...o,otkazana:!o.otkazana,preuzeta:false});
+  },[orders]);
+
+  const navMonth=dir=>{let nm=month+dir,ny=year;if(nm<0){nm=11;ny--;}if(nm>11){nm=0;ny++;}setMonth(nm);setYear(ny);};
+  const openAdd=d=>{setEditOrder(null);setForm({date:d});};
+  const openEdit=o=>{setEditOrder(o);setForm({date:o.datum,existing:o});};
+  const title=view==="annual"?`${year}`:view==="month"?`${MONTHS[month]} ${year}`:selDate;
+
+  return h("div",{style:{minHeight:"100vh",background:C.bg,fontFamily:FA}},
+    h("header",{style:{background:C.crimson,padding:"0 16px",display:"flex",alignItems:"center",gap:12,minHeight:54,flexWrap:"wrap",position:"sticky",top:0,zIndex:100,boxShadow:`0 2px 16px ${C.shadow}`}},
+      h("div",{style:{display:"flex",flexDirection:"column",lineHeight:1.1}},
+        h("span",{style:{color:"#fff",fontWeight:900,fontSize:15,fontFamily:FS,letterSpacing:"3px",textTransform:"uppercase"}},"ZAMEZI"),
+        h("span",{style:{color:C.pink,fontSize:12,fontFamily:FS,fontStyle:"italic",letterSpacing:"1px"}},"ketering")),
+      syncing&&h("div",{className:"spinner",style:{borderColor:"#fff4",borderTopColor:"#fff"}}),
+      h("div",{style:{display:"flex",gap:3,background:"#ffffff22",borderRadius:10,padding:3}},
+        [["annual","Godišnji"],["month","Mesečni"],["day","Dnevni"]].map(([v,l])=>
+          h("button",{key:v,onClick:()=>setView(v),style:{padding:"5px 11px",borderRadius:7,border:"none",cursor:"pointer",fontWeight:700,fontSize:11,background:view===v?"#fff":"transparent",color:view===v?C.crimson:"#ffffffbb"}},l))),
+      h("div",{style:{display:"flex",alignItems:"center",gap:7,marginLeft:"auto"}},
+        view!=="day"&&h(Fragment,null,
+          h("button",{onClick:()=>view==="annual"?setYear(y=>y-1):navMonth(-1),style:{background:"#ffffff22",border:"none",color:"#fff",borderRadius:8,padding:"5px 11px",cursor:"pointer",fontSize:17}},"‹"),
+          h("span",{style:{color:"#fff",fontWeight:700,minWidth:124,textAlign:"center",fontSize:13}},title),
+          h("button",{onClick:()=>view==="annual"?setYear(y=>y+1):navMonth(1),style:{background:"#ffffff22",border:"none",color:"#fff",borderRadius:8,padding:"5px 11px",cursor:"pointer",fontSize:17}},"›")),
+        view==="day"&&h(Fragment,null,
+          h("input",{type:"date",value:selDate,onChange:e=>setSelDate(e.target.value),style:{border:"none",borderRadius:8,padding:"5px 9px",fontSize:13,fontFamily:FA}}),
+          h("button",{onClick:()=>openAdd(selDate),style:{padding:"6px 12px",borderRadius:8,border:"none",background:"#ffffff33",color:"#fff",cursor:"pointer",fontWeight:700,fontSize:12}},"+ Porudžbina")),
+        h("button",{onClick:()=>setShowMenu(true),style:{padding:"6px 11px",borderRadius:8,border:"1px solid #ffffff55",background:"transparent",color:"#fff",cursor:"pointer",fontWeight:700,fontSize:12}},"🍽 Meni"))),
+    h("main",{style:{padding:"16px",maxWidth:1040,margin:"0 auto"}},
+      view==="annual"&&h(AnnualView,{orders,year,onSelectMonth:m=>{setMonth(m);setView("month");}}),
+      view==="month"&&h(MonthlyView,{orders,year,month,onSelectDay:d=>{setSelDate(dKey(year,month,d));setView("day");}}),
+      view==="day"&&h(DailyView,{orders,date:selDate,onAdd:()=>openAdd(selDate),onEdit:openEdit,onDelete:handleDelete,onTogglePreuzeta:handleTogglePreuzeta,onToggleOtkazana:handleToggleOtkazana,onPrint:()=>setShowPrint(true)})),
+    form&&h(OrderForm,{date:form.date,existing:form.existing,menu,onSave:handleSave,onCancel:()=>{setForm(null);setEditOrder(null);}}),
+    showMenu&&h(MenuManager,{menu,setMenu,onClose:()=>setShowMenu(false)}),
+    showPrint&&h(PrintDay,{orders,date:selDate,onClose:()=>setShowPrint(false)}));
+}
+
+createRoot(document.getElementById("root")).render(h(App,null));
+</script>
+</body>
+</html>
